@@ -196,20 +196,36 @@ def parse_date(raw, reference: date = None) -> date:
         if s == word:
             return ref + timedelta(days=_RELATIVE_WORDS[word])
 
-    # "in 3 days" / "بعد 3 ايام" / "after three days"
+    # "in 3 days" / "بعد 3 ايام" / "after three days" / "بعد أسبوعين"
+    #
+    # The unit words must NOT also be counts. "أسبوع" previously sat in _SMALL
+    # as 7 *and* set the weekly multiplier, so "بعد أسبوع" came out as seven
+    # weeks instead of seven days.
     tokens = s.replace("،", " ").split()
     _SMALL = {"one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6,
-              "seven": 7, "eight": 8, "nine": 9, "ten": 10, "a": 1,
+              "seven": 7, "eight": 8, "nine": 9, "ten": 10, "a": 1, "an": 1,
               "واحد": 1, "يومين": 2, "تلاتة": 3, "تلات": 3, "أربعة": 4,
-              "خمسة": 5, "اسبوع": 7, "أسبوع": 7, "week": 7}
+              "خمسة": 5, "ستة": 6, "سبعة": 7, "عشرة": 10}
+    _WEEK_WORDS = ("week", "اسبوع", "أسبوع", "اسابيع", "أسابيع")
+    _TWO_WEEK_WORDS = ("أسبوعين", "اسبوعين", "fortnight")
+
     if any(t in ("in", "after", "بعد", "خلال") for t in tokens):
+        weekly = any(w in s for w in _WEEK_WORDS)
+        if any(w in s for w in _TWO_WEEK_WORDS):
+            return ref + timedelta(days=14)
+
+        count = None
         for t in tokens:
-            n = _SMALL.get(t)
-            if n is None and t.isdigit():
-                n = int(t)
-            if n:
-                mult = 7 if any(w in s for w in ("week", "اسبوع", "أسبوع")) else 1
-                return ref + timedelta(days=n * mult)
+            v = _SMALL.get(t)
+            if v is None and t.isdigit():
+                v = int(t)
+            if v:
+                count = v
+                break
+        if count is None and weekly:
+            count = 1                     # "in a week" / "بعد أسبوع"
+        if count:
+            return ref + timedelta(days=count * (7 if weekly else 1))
 
     # Weekday names. "next X" means the X in the following week; "last X" looks
     # backwards, which classify_date() then rejects as a past date.

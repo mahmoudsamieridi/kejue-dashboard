@@ -64,6 +64,15 @@ check("arabic tomorrow", sch.parse_date("بكرا") == today + timedelta(days=1)
 check("arabic day after", sch.parse_date("بعد بكرا") == today + timedelta(days=2))
 check("in 3 days", sch.parse_date("in 3 days") == today + timedelta(days=3))
 check("in a week", sch.parse_date("in a week") == today + timedelta(days=7))
+# Regression: the unit word used to double as a count, so "بعد أسبوع" came
+# out as seven WEEKS. Caught against the live service, not by the old suite.
+for phrase, days in [("بعد أسبوع", 7), ("بعد اسبوع", 7), ("in one week", 7),
+                     ("after a week", 7), ("بعد أسبوعين", 14),
+                     ("in two weeks", 14), ("بعد 3 ايام", 3),
+                     ("بعد يومين", 2), ("in 10 days", 10)]:
+    got = sch.parse_date(phrase)
+    check(f"{phrase!r} = +{days}d", got == today + timedelta(days=days),
+          f"got +{(got - today).days}d")
 check("weekday is always future",
       sch.parse_date("monday") > today and sch.parse_date("monday").weekday() == 0)
 check("next tuesday is 8-14 days out",
