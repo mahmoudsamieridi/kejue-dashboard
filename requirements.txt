@@ -1,3 +1,6 @@
 Flask
 Flask-SocketIO
 gunicorn
+# zoneinfo has no timezone database of its own on slim Linux images, and
+# ZoneInfo("Asia/Amman") raises ZoneInfoNotFoundError without this.
+tzdata

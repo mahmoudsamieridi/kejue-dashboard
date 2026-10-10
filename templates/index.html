@@ -40,6 +40,20 @@
             </div>
         </header>
 
+        <!-- Upcoming meetings: proves the agents book real future dates, not just "tomorrow" -->
+        <section class="mb-10">
+            <div class="flex items-baseline justify-between mb-4">
+                <h2 class="text-sm font-semibold uppercase tracking-wider text-sonusMuted">Upcoming Meetings</h2>
+                <span class="text-xs text-sonusMuted">Asia/Amman &middot; Sun&ndash;Thu &middot; horizon 60 days</span>
+            </div>
+            <div id="meetings-container" class="grid gap-3 sm:grid-cols-2">
+                <div id="meetings-empty" class="text-sonusMuted text-sm border border-sonusBorder rounded-xl bg-sonusCard/30 p-5 sm:col-span-2">
+                    No meetings booked yet.
+                </div>
+            </div>
+        </section>
+
+        <h2 class="text-sm font-semibold uppercase tracking-wider text-sonusMuted mb-4">Extracted Calls</h2>
         <div id="calls-container" class="space-y-6">
             <!-- Static Empty State -->
             <div id="empty-state" class="text-center py-16 border border-sonusBorder rounded-xl bg-sonusCard/30">
@@ -57,10 +71,11 @@
         function renderCard(payload, isNew = false) {
             document.getElementById('empty-state').style.display = 'none';
 
-            const pName = payload.prospect_name || 'Unknown Prospect';
-            const cName = payload.company_name || 'Unknown Company';
-            const uCase = payload.use_case || 'N/A';
-            const summary = payload.call_summary || 'No summary available for this call.';
+            // Escaped: these values originate from caller speech via extraction.
+            const pName = escapeHtml(payload.prospect_name || 'Unknown Prospect');
+            const cName = escapeHtml(payload.company_name || 'Unknown Company');
+            const uCase = escapeHtml(payload.use_case || 'N/A');
+            const summary = escapeHtml(payload.call_summary || 'No summary available for this call.');
             
             let statusTag = 'Call Completed';
             let statusColor = 'text-sonusText bg-[#211E1C] border-sonusBorder';
@@ -118,8 +133,34 @@
                 .catch(error => console.log("Waiting for data..."));
         }
 
+        function escapeHtml(s) {
+            return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[c]));
+        }
+
+        function fetchMeetings() {
+            fetch('/get_meetings')
+                .then(r => r.json())
+                .then(meetings => {
+                    const container = document.getElementById('meetings-container');
+                    if (!meetings.length) return;
+                    container.innerHTML = meetings.map(m => `
+                        <div class="border border-sonusBorder rounded-xl bg-sonusCard p-4 flex flex-col gap-1">
+                            <p class="text-sonusAccent text-sm font-semibold">${escapeHtml(m.date_spoken)}</p>
+                            <p class="text-white font-medium">${escapeHtml(m.time_spoken)}</p>
+                            <p class="text-sonusMuted text-xs mt-1">
+                                ${escapeHtml(m.prospect_name)} &middot; ${escapeHtml(m.company_name)}
+                            </p>
+                        </div>`).join('');
+                })
+                .catch(() => {});
+        }
+
         fetchCalls();
+        fetchMeetings();
         setInterval(fetchCalls, 3000);
+        setInterval(fetchMeetings, 5000);
     </script>
 </body>
 </html>
