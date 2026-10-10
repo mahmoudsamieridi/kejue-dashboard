@@ -74,7 +74,7 @@ def webhook():
     return 'OK', 200
 
 # 4. أداة للوكيل الذكي: فحص المواعيد المتاحة
-@app.route('/check_availability', methods=['POST'])
+@app.route('/check_availability', methods=['GET', 'POST'])
 def check_availability():
     all_slots = ["10:00 AM","11:00 AM","12:00 PM","01:00 PM","02:00 PM","03:00 PM","04:00 PM","05:00 PM"]
     
@@ -95,7 +95,7 @@ def check_availability():
     }), 200
 
 # 5. أداة للوكيل الذكي: حجز الموعد
-@app.route('/book_time', methods=['POST'])
+@app.route('/book_time', methods=['GET', 'POST'])
 def book_time():
     data = request.json
     time_slot = data.get('time_slot')
