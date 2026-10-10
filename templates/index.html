@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kejue Outbound Sales Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: {
+                        sonusBg: '#12100E',
+                        sonusCard: '#1A1816',
+                        sonusBorder: '#2A2624',
+                        sonusAccent: '#E37452',
+                        sonusText: '#E8E6E3',
+                        sonusMuted: '#9CA3AF',
+                        sonusSuccess: '#22C55E'
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+<body class="bg-sonusBg text-sonusText font-sans min-h-screen selection:bg-sonusAccent selection:text-white">
+
+    <div class="max-w-4xl mx-auto p-6">
+        
+        <header class="flex justify-between items-center mb-10 pb-6 border-b border-sonusBorder">
+            <div>
+                <h1 class="text-3xl font-bold flex items-center gap-3 text-white">
+                    🎙️ Kejue Outbound Sales
+                </h1>
+                <p class="text-sonusMuted mt-2 text-sm">Live AI Call Extraction & Database Dashboard</p>
+            </div>
+            <div class="flex items-center gap-2 border border-sonusBorder px-4 py-2 rounded-lg bg-sonusCard shadow-sm">
+                <span class="w-2.5 h-2.5 rounded-full bg-sonusSuccess animate-pulse"></span>
+                <span class="text-sm font-semibold text-sonusText tracking-wide">System Online</span>
+            </div>
+        </header>
+
+        <div id="calls-container" class="space-y-6">
+            <!-- Static Empty State -->
+            <div id="empty-state" class="text-center py-16 border border-sonusBorder rounded-xl bg-sonusCard/30">
+                <p class="text-sonusText font-medium text-lg">Dashboard is Ready & Listening 🚀</p>
+                <p class="text-sonusMuted text-sm mt-2">No calls extracted yet. Completed calls will appear here.</p>
+            </div>
+        </div>
+
+    </div>
+
+    <!-- كود التحديث الذكي -->
+    <script>
+        let callCount = 0;
+
+        function renderCard(payload, isNew = false) {
+            document.getElementById('empty-state').style.display = 'none';
+
+            const pName = payload.prospect_name || 'Unknown Prospect';
+            const cName = payload.company_name || 'Unknown Company';
+            const uCase = payload.use_case || 'N/A';
+            const summary = payload.call_summary || 'No summary available for this call.';
+            
+            let statusTag = 'Call Completed';
+            let statusColor = 'text-sonusText bg-[#211E1C] border-sonusBorder';
+            
+            if (payload.is_meeting_booked === true || String(payload.is_meeting_booked).toLowerCase() === 'true') {
+                statusTag = 'Meeting Booked';
+                statusColor = 'text-sonusSuccess bg-sonusSuccess/10 border-sonusSuccess/30';
+            }
+
+            const timeLabel = isNew ? `<span class="w-2 h-2 rounded-full bg-sonusAccent shadow-[0_0_8px_rgba(227,116,82,0.6)] animate-pulse"></span> Just Extracted` : 'From Database';
+
+            const callCard = `
+                <div class="rounded-xl p-6 shadow-lg border border-sonusBorder hover:border-sonusAccent/60 transition-all duration-300 bg-sonusCard mb-4 relative group text-left">
+                    <div class="flex justify-between items-start mb-5">
+                        <div class="w-full">
+                            <h3 class="text-2xl font-bold text-white tracking-tight">${pName}</h3>
+                            <p class="text-sonusAccent font-medium mt-1 text-sm">${cName}</p>
+                        </div>
+                        <span class="absolute top-6 right-6 px-3 py-1 rounded text-xs font-semibold border ${statusColor}">${statusTag}</span>
+                    </div>
+                    <div class="mb-5">
+                        <p class="text-[11px] text-sonusMuted uppercase tracking-wider font-semibold mb-2">Use Case</p>
+                        <p class="text-sonusText text-sm font-medium bg-[#13110F] inline-block px-3 py-1.5 rounded border border-sonusBorder">${uCase}</p>
+                    </div>
+                    <div class="mb-4">
+                        <p class="text-[11px] text-sonusMuted uppercase tracking-wider font-semibold mb-2 flex items-center justify-start gap-2">
+                            Call Summary <span class="text-sonusAccent opacity-0 group-hover:opacity-100 transition-opacity text-[10px] bg-sonusAccent/10 px-2 py-0.5 rounded">(Click to expand)</span>
+                        </p>
+                        <div class="bg-[#13110F] p-4 rounded-lg border border-sonusBorder cursor-pointer hover:border-sonusAccent/40 transition-colors" onclick="const p = this.querySelector('p'); p.classList.toggle('line-clamp-2'); p.classList.toggle('line-clamp-none');">
+                            <p class="text-sonusText/90 text-sm leading-relaxed line-clamp-2 transition-all duration-300">${summary}</p>
+                        </div>
+                    </div>
+                    <div class="mt-5 pt-4 border-t border-sonusBorder flex justify-between items-center">
+                        <span class="text-xs text-sonusMuted font-mono bg-[#13110F] px-2 py-1 rounded border border-sonusBorder">Agent: Kejue </span>
+                        <span class="text-xs text-sonusMuted flex items-center gap-2">${timeLabel}</span>
+                    </div>
+                </div>
+            `;
+            document.getElementById('calls-container').insertAdjacentHTML('afterbegin', callCard);
+        }
+
+        function fetchCalls() {
+            fetch('/get_all_calls')
+                .then(response => response.json())
+                .then(calls => {
+                    if (calls.length > callCount) {
+                        const newCalls = calls.slice(callCount);
+                        newCalls.forEach(call => {
+                            let isLive = (callCount > 0);
+                            renderCard(call, isLive);
+                        });
+                        callCount = calls.length;
+                    }
+                })
+                .catch(error => console.log("Waiting for data..."));
+        }
+
+        fetchCalls();
+        setInterval(fetchCalls, 3000);
+    </script>
+</body>
+</html>
