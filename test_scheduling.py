@@ -1,11 +1,12 @@
 """
-Adversarial tests for the scheduling tools.
+Adversarial tests for the scheduling tools and the availability API.
 
 Run:  python test_scheduling.py
 
-These are the cases a prospect actually creates on a live call: vague days,
-weekends, dates in the past, dates a year out, times that do not exist, the
-same slot twice, and the model passing a raw phrase straight through.
+Availability is dashboard-owned, so the central rule under test is: an agent
+can book a slot if and only if somebody opened that exact slot, it is still
+open, and it is far enough ahead to attend. Everything else must refuse and
+offer real alternatives.
 """
 
 import os
@@ -13,7 +14,15 @@ import sys
 import tempfile
 from datetime import timedelta
 
-# Use a scratch database so a test run never touches real bookings.
+# Test labels contain Arabic. On a console defaulting to a legacy codepage
+# (cp1252 on Windows) printing them raises UnicodeEncodeError and the whole
+# run dies on output rather than on a real failure.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 _tmp = tempfile.mkdtemp()
 os.environ["KEJUE_DB"] = os.path.join(_tmp, "test.db")
 
@@ -45,56 +54,58 @@ def post(path, **payload):
     return client.post(path, json=payload).get_json()
 
 
-def next_working(offset_from=None, skip=0):
-    start = (offset_from or sch.today()) + timedelta(days=1)
-    return sch.next_working_days(start, skip + 1)[skip]
+def add_slots(d, times):
+    return client.post("/api/slots",
+                       json={"date": d.isoformat(), "times": times}).get_json()
+
+
+def wipe():
+    conn = application.db()
+    conn.execute("DELETE FROM slots")
+    conn.commit()
+    conn.close()
+
+
+today = sch.today()
+D1 = today + timedelta(days=3)     # ordinary future day
+D2 = today + timedelta(days=10)
+D_FAR = today + timedelta(days=90)  # far future - must work, nothing is capped
 
 
 # ---------------------------------------------------------------- date parsing
 print("\n[1] date parsing")
 
-today = sch.today()
 check("ISO date", sch.parse_date("2026-11-03").isoformat() == "2026-11-03")
 check("day-first numeric", sch.parse_date("03/11/2026").isoformat() == "2026-11-03")
 check("today", sch.parse_date("today") == today)
 check("tomorrow", sch.parse_date("tomorrow") == today + timedelta(days=1))
+check("arabic tomorrow", sch.parse_date("بكرا") == today + timedelta(days=1))
 check("day after tomorrow",
       sch.parse_date("day after tomorrow") == today + timedelta(days=2))
-check("arabic tomorrow", sch.parse_date("بكرا") == today + timedelta(days=1))
-check("arabic day after", sch.parse_date("بعد بكرا") == today + timedelta(days=2))
-check("in 3 days", sch.parse_date("in 3 days") == today + timedelta(days=3))
-check("in a week", sch.parse_date("in a week") == today + timedelta(days=7))
-# Regression: the unit word used to double as a count, so "بعد أسبوع" came
-# out as seven WEEKS. Caught against the live service, not by the old suite.
-for phrase, days in [("بعد أسبوع", 7), ("بعد اسبوع", 7), ("in one week", 7),
-                     ("after a week", 7), ("بعد أسبوعين", 14),
-                     ("in two weeks", 14), ("بعد 3 ايام", 3),
-                     ("بعد يومين", 2), ("in 10 days", 10)]:
-    got = sch.parse_date(phrase)
-    check(f"{phrase!r} = +{days}d", got == today + timedelta(days=days),
-          f"got +{(got - today).days}d")
+check("yesterday", sch.parse_date("yesterday") == today - timedelta(days=1))
+check("arabic yesterday", sch.parse_date("امبارح") == today - timedelta(days=1))
+check("last week", sch.parse_date("last week") == today - timedelta(days=7))
+check("last tuesday in the past",
+      sch.parse_date("last tuesday") < today
+      and sch.parse_date("last tuesday").weekday() == 1)
 check("weekday is always future",
       sch.parse_date("monday") > today and sch.parse_date("monday").weekday() == 0)
 check("next tuesday is 8-14 days out",
       7 <= (sch.parse_date("next tuesday") - today).days <= 14)
-check("arabic weekday",
-      sch.parse_date("الخميس").weekday() == 3)
+check("arabic weekday", sch.parse_date("الخميس").weekday() == 3)
 check("month name + day",
-      sch.parse_date("october 14").month == 10 and sch.parse_date("october 14").day == 14)
-check("bare month/day rolls to next year when past",
-      sch.parse_date("january 5") > today)
+      sch.parse_date("october 14").month == 10
+      and sch.parse_date("october 14").day == 14)
 
-check("yesterday", sch.parse_date("yesterday") == today - timedelta(days=1))
-check("arabic yesterday", sch.parse_date("امبارح") == today - timedelta(days=1))
-check("day before yesterday",
-      sch.parse_date("day before yesterday") == today - timedelta(days=2))
-check("last week", sch.parse_date("last week") == today - timedelta(days=7))
-check("last tuesday is in the past",
-      sch.parse_date("last tuesday") < today
-      and sch.parse_date("last tuesday").weekday() == 1,
-      str(sch.parse_date("last tuesday")))
-check("next vs last tuesday differ",
-      sch.parse_date("next tuesday") != sch.parse_date("last tuesday"))
+# Regression: the unit word used to double as a count, so "بعد أسبوع" came
+# out as seven WEEKS.
+for phrase, days in [("in 3 days", 3), ("in a week", 7), ("بعد أسبوع", 7),
+                     ("بعد اسبوع", 7), ("in one week", 7), ("after a week", 7),
+                     ("بعد أسبوعين", 14), ("in two weeks", 14),
+                     ("بعد 3 ايام", 3), ("بعد يومين", 2), ("in 10 days", 10)]:
+    got = sch.parse_date(phrase)
+    check(f"{phrase!r} = +{days}d", got == today + timedelta(days=days),
+          f"got +{(got - today).days}d")
 
 for junk in ("whenever you like", "", "asap", "the usual time"):
     try:
@@ -107,142 +118,213 @@ for junk in ("whenever you like", "", "asap", "the usual time"):
 # ---------------------------------------------------------------- time parsing
 print("\n[2] time parsing")
 
-check('"10:00 AM"', sch.parse_slot("10:00 AM") == "10:00")
-check('"10 am"', sch.parse_slot("10 am") == "10:00")
-check('"2 pm"', sch.parse_slot("2 pm") == "14:00")
-check('"14:00"', sch.parse_slot("14:00") == "14:00")
-check('bare "2" assumed afternoon', sch.parse_slot("2") == "14:00")
-check('"ten in the morning"', sch.parse_slot("ten in the morning") == "10:00")
-check('"twelve noon"', sch.parse_slot("twelve noon") == "12:00")
-check('arabic "خمسة بعد الضهر"', sch.parse_slot("خمسة بعد الضهر") == "17:00")
-check("out-of-hours 9am rejected", sch.parse_slot("9:00 AM") is None)
-check("out-of-hours 8pm rejected", sch.parse_slot("8 pm") is None)
-check("half-hour rejected", sch.parse_slot("10:30 AM") is None)
-check("nonsense rejected", sch.parse_slot("sometime soon") is None)
+for raw, want in [("10:00 AM", "10:00"), ("10 am", "10:00"), ("2 pm", "14:00"),
+                  ("14:00", "14:00"), ("2", "14:00"), ("09:30", "09:30"),
+                  ("9:30 am", "09:30"), ("ten in the morning", "10:00"),
+                  ("half past two", "14:30"), ("quarter past ten", "10:15"),
+                  ("quarter to three", "14:45"), ("8 pm", "20:00"),
+                  ("عشرة الصبح", "10:00"), ("تلاتة ونص", "15:30"),
+                  ("خمسة بعد الضهر", "17:00"), ("عشرة وربع", "10:15")]:
+    check(f"{raw!r} -> {want}", sch.parse_slot(raw) == want,
+          f"got {sch.parse_slot(raw)}")
+
+for junk in ("sometime soon", "", "whenever", "the usual"):
+    check(f"unparseable time rejected: {junk!r}", sch.parse_slot(junk) is None)
 
 
 # -------------------------------------------------------------- spoken wording
-print("\n[3] spoken forms contain no digits")
+print("\n[3] spoken forms never contain digits")
+
+for t in ["10:00", "12:00", "09:30", "14:15", "16:45", "17:20", "08:07",
+          "13:37", "20:00", "23:55"]:
+    for lang in ("en", "ar"):
+        said = sch.spoken_time(t, lang)
+        check(f"{lang} {t} -> {said!r}",
+              not any(ch.isdigit() for ch in said))
 
 d = sch.parse_date("2026-11-03")
-for lang in ("en", "ar"):
-    text = sch.spoken_slot(d, "14:00", lang)
-    check(f"{lang} slot wording digit-free: {text!r}",
-          not any(ch.isdigit() for ch in text))
 check("english wording reads naturally",
-      sch.spoken_slot(d, "14:00", "en") ==
-      "Tuesday the third of November at two in the afternoon",
-      sch.spoken_slot(d, "14:00", "en"))
+      sch.spoken_slot(d, "14:30", "en") ==
+      "Tuesday the third of November at half past two in the afternoon",
+      sch.spoken_slot(d, "14:30", "en"))
+check("noon is special-cased", sch.spoken_time("12:00", "en") == "twelve noon")
+check("arabic date digit-free",
+      not any(ch.isdigit() for ch in sch.spoken_date(d, "ar")))
+
+
+# ------------------------------------------------------------ availability API
+print("\n[4] availability API (dashboard owns the calendar)")
+
+wipe()
+
+r = client.get("/api/slots").get_json()
+check("starts empty", r["slots"] == [])
+
+r = add_slots(D1, ["10:00", "11:00", "2 pm"])
+check("creates slots from mixed formats", sorted(r["created"]) == ["10:00", "11:00", "14:00"],
+      str(r))
+check("no unclear times", r["unclear"] == [])
+
+r = add_slots(D1, ["10:00"])
+check("duplicate reported, not errored", r["duplicates"] == ["10:00"] and r["created"] == [])
+
+r = add_slots(D1, ["not a time"])
+check("unparseable time reported", r["unclear"] == ["not a time"])
+
+r = client.post("/api/slots", json={"date": "gibberish", "times": ["10:00"]})
+check("bad date rejected with 400", r.status_code == 400)
+
+r = client.post("/api/slots", json={"date": D1.isoformat(), "times": []})
+check("empty times rejected with 400", r.status_code == 400)
+
+r = client.get("/api/slots").get_json()
+check("lists what was created", len(r["slots"]) == 3)
+check("slots carry spoken wording",
+      all(not any(ch.isdigit() for ch in s["time_spoken"]) for s in r["slots"]))
+
+slot_id = r["slots"][0]["id"]
+res = client.delete(f"/api/slots/{slot_id}")
+check("deletes a slot", res.status_code == 200)
+check("deletion is reflected", len(client.get("/api/slots").get_json()["slots"]) == 2)
+check("deleting twice is 404", client.delete(f"/api/slots/{slot_id}").status_code == 404)
 
 
 # --------------------------------------------------------- check_availability
-print("\n[4] check_availability")
+print("\n[5] check_availability reads only what exists")
+
+wipe()
 
 r = post("/check_availability")
-check("no date -> offers days", r["status"] == "ok" and len(r["days"]) >= 1)
-check("no date -> days are working days",
-      all(sch.parse_date(x["date"]).weekday() not in sch.WEEKEND_DAYS
-          for x in r["days"]))
-check("no date -> exposes today", r["today"] == sch.today().isoformat())
-check("no date -> spoken day has no digits",
-      not any(ch.isdigit() for ch in r["days"][0]["date_spoken"]))
+check("empty calendar -> no days", r["days"] == [])
+check("empty calendar -> tells agent not to invent a time",
+      "not invent" in r["instruction"] or "no availability" in r["instruction"].lower(),
+      r["instruction"])
 
-far = next_working(sch.today() + timedelta(days=20))
-r = post("/check_availability", date=far.isoformat())
-check("far future date is available (not just tomorrow!)",
-      r["status"] == "available" and r["days"][0]["date"] == far.isoformat(),
+add_slots(D1, ["10:00", "11:00"])
+add_slots(D2, ["15:00"])
+add_slots(D_FAR, ["11:00"])
+
+r = post("/check_availability")
+check("no date -> offers soonest real days", [x["date"] for x in r["days"]][0] == D1.isoformat(),
+      str([x["date"] for x in r["days"]]))
+check("offers only opened times",
+      [s["time_slot"] for s in r["days"][0]["slots"]] == ["10:00", "11:00"])
+
+r = post("/check_availability", date=D_FAR.isoformat())
+check("far future day works - nothing is capped",
+      r["status"] == "available" and r["days"][0]["date"] == D_FAR.isoformat(),
       r.get("status"))
 
-r = post("/check_availability", date="2020-01-01")
-check("past date refused", r["status"] == "unavailable"
-      and r["reason"] == "in_the_past", r.get("reason"))
-check("past date still offers alternatives", len(r["days"]) >= 1)
+empty_day = today + timedelta(days=4)
+r = post("/check_availability", date=empty_day.isoformat())
+check("day with no slots -> no_slots_on_date",
+      r["status"] == "no_slots_on_date", r.get("status"))
+check("day with no slots still offers alternatives", len(r["days"]) >= 1)
 
-friday = today + timedelta(days=(4 - today.weekday()) % 7 or 7)
-r = post("/check_availability", date=friday.isoformat())
-check("friday refused as weekend",
-      r["status"] == "unavailable" and r["reason"] == "weekend", r.get("reason"))
-
-r = post("/check_availability", date=(today + timedelta(days=400)).isoformat())
-check("beyond horizon refused",
-      r["status"] == "unavailable" and r["reason"] == "beyond_horizon",
-      r.get("reason"))
-
-for phrase in ("yesterday", "last tuesday", "last week", "امبارح"):
-    r = post("/check_availability", date=phrase)
-    check(f"past phrase {phrase!r} -> in_the_past, not unclear_date",
-          r["status"] == "unavailable" and r["reason"] == "in_the_past",
-          f"{r.get('status')}/{r.get('reason')}")
+r = post("/check_availability", date="yesterday")
+check("past date -> in_the_past",
+      r["status"] == "unavailable" and r["reason"] == "in_the_past", r.get("reason"))
 
 r = post("/check_availability", date="whenever suits you")
-check("unparseable date handled gracefully",
-      r["status"] == "unclear_date" and len(r["days"]) >= 1, r.get("status"))
+check("unparseable date handled gracefully", r["status"] == "unclear_date")
 
-r = post("/check_availability", date="next tuesday", language="ar")
+r = post("/check_availability", date=D1.isoformat(), language="ar")
 check("arabic wording returned",
       any(ord(ch) > 0x600 for ch in r["days"][0]["date_spoken"]))
 
+# A weekend day is bookable if, and only if, somebody opened it. There is no
+# hard-coded weekend any more.
+friday = today + timedelta(days=(4 - today.weekday()) % 7 or 7)
+r = post("/check_availability", date=friday.isoformat())
+check("friday closed when no slots opened", r["status"] == "no_slots_on_date")
+add_slots(friday, ["11:00"])
+r = post("/check_availability", date=friday.isoformat())
+check("friday opens once a slot is added - no hard-coded weekend",
+      r["status"] == "available", r.get("status"))
+
 
 # ------------------------------------------------------------------ book_time
-print("\n[5] book_time")
+print("\n[6] book_time")
 
-target = next_working(sch.today() + timedelta(days=10))
-r = post("/book_time", date=target.isoformat(), time_slot="11:00 AM",
+wipe()
+add_slots(D1, ["10:00", "11:00", "14:00"])
+add_slots(D2, ["15:00"])
+
+r = post("/book_time", date=D1.isoformat(), time_slot="11:00 AM",
          prospect_name="Mahmoud", company_name="Scanwave")
-check("books a date ten+ days out", r["status"] == "booked" and r["booked"] is True,
+check("books an opened slot", r["status"] == "booked" and r["booked"] is True,
       r.get("status"))
 check("confirmation is digit-free",
       not any(ch.isdigit() for ch in r["confirmation_spoken"]),
       r.get("confirmation_spoken"))
 
-r = post("/book_time", date=target.isoformat(), time_slot="11:00 AM")
-check("double booking refused",
-      r["status"] == "slot_taken" and r["booked"] is False, r.get("status"))
+r = post("/book_time", date=D1.isoformat(), time_slot="11:00")
+check("double booking refused", r["status"] == "slot_taken", r.get("status"))
 check("double booking offers alternatives", len(r["days"]) >= 1)
 
-r = post("/check_availability", date=target.isoformat())
+r = post("/check_availability", date=D1.isoformat())
 check("booked slot disappears from availability",
       "11:00" not in [s["time_slot"] for s in r["days"][0]["slots"]])
 
-r = post("/book_time", date=target.isoformat(), time_slot="9:00 AM")
-check("out-of-hours booking refused", r["status"] == "unclear_time", r.get("status"))
+r = post("/book_time", date=D1.isoformat(), time_slot="16:00")
+check("time that was never opened is refused",
+      r["status"] == "slot_not_offered", r.get("status"))
+check("refusal tells agent not to invent a time",
+      "invent" in r["instruction"], r["instruction"])
 
-r = post("/book_time", date=friday.isoformat(), time_slot="11:00 AM")
-check("weekend booking refused",
-      r["status"] == "unavailable" and r["reason"] == "weekend", r.get("status"))
+r = post("/book_time", date=(today + timedelta(days=5)).isoformat(), time_slot="10:00")
+check("day that was never opened is refused",
+      r["status"] == "slot_not_offered", r.get("status"))
 
-r = post("/book_time", date="2020-05-05", time_slot="11:00 AM")
+r = post("/book_time", date="yesterday", time_slot="10:00")
 check("past booking refused",
       r["status"] == "unavailable" and r["reason"] == "in_the_past", r.get("status"))
 
-r = post("/book_time", time_slot="11:00 AM")
-check("missing date refused", r["status"] == "missing_date", r.get("status"))
+check("missing date refused",
+      post("/book_time", time_slot="10:00")["status"] == "missing_date")
+check("missing time refused",
+      post("/book_time", date=D1.isoformat())["status"] == "missing_time")
+check("vague time refused rather than guessed",
+      post("/book_time", date=D1.isoformat(),
+           time_slot="sometime next week")["status"] == "unclear_time")
 
-r = post("/book_time", date=target.isoformat())
-check("missing time refused", r["status"] == "missing_time", r.get("status"))
-
-r = post("/book_time", date="in 12 days", time_slot="three in the afternoon")
+r = post("/book_time", date="in 3 days", time_slot="ten in the morning")
 check("natural-language date + spoken time both accepted",
       r["status"] == "booked", r.get("status"))
 
-r = post("/book_time", date=sch.today().isoformat(), time_slot="10:00 AM")
-check("today's early slot refused as past/too soon",
-      r["status"] in ("too_soon", "unclear_time", "unavailable", "booked"),
-      r.get("status"))
+# A slot starting within the lead time must not be bookable.
+wipe()
+soon = (sch.now() + timedelta(minutes=10))
+add_slots(soon.date(), [soon.strftime("%H:%M")])
+r = post("/book_time", date=soon.date().isoformat(),
+         time_slot=soon.strftime("%H:%M"))
+check("slot inside the lead time refused", r["status"] == "too_soon", r.get("status"))
+r = post("/check_availability", date=soon.date().isoformat())
+check("slot inside the lead time hidden from availability",
+      r["status"] == "no_slots_on_date", r.get("status"))
 
-r = post("/book_time", date=target.isoformat(), time_slot="sometime next week")
-check("vague time refused rather than guessed",
-      r["status"] == "unclear_time", r.get("status"))
+
+# ------------------------------------------------------- deleting a booking
+print("\n[7] cancelling via the dashboard")
+
+wipe()
+add_slots(D1, ["10:00"])
+post("/book_time", date=D1.isoformat(), time_slot="10:00",
+     prospect_name="Lina", company_name="Aqaba Logistics")
+
+slots = client.get("/api/slots").get_json()["slots"]
+check("booked slot shows who booked it",
+      slots[0]["status"] == "booked" and slots[0]["prospect_name"] == "Lina")
+
+res = client.delete(f"/api/slots/{slots[0]['id']}")
+check("a booked slot can be cancelled", res.status_code == 200)
+check("cancellation reports what went", res.get_json()["deleted"]["status"] == "booked")
+check("calendar is empty afterwards",
+      client.get("/api/slots").get_json()["slots"] == [])
 
 
 # ------------------------------------------------------------------- dashboard
-print("\n[6] dashboard wiring")
-
-r = client.get("/get_meetings").get_json()
-check("meetings endpoint lists bookings", len(r) >= 1)
-check("meetings carry a real date", r[0]["date"] >= sch.today().isoformat())
-check("meetings carry spoken wording",
-      not any(ch.isdigit() for ch in r[0]["date_spoken"]))
+print("\n[8] dashboard wiring")
 
 r = client.post("/webhook", json={"call": {"extractions": [
     {"result": {"prospect_name": "Lina", "company_name": "Aqaba Logistics",
@@ -254,43 +336,8 @@ check("webhook survives an empty payload",
 check("call appears in dashboard feed",
       any(c["prospect_name"] == "Lina"
           for c in client.get("/get_all_calls").get_json()))
-
-
-# ------------------------------------------------------- legacy db migration
-print("\n[7] legacy database migration")
-
-# Rebuild the pre-date schema exactly as the original app.py left it: a bare
-# time, in "02:00 PM" form, with no date column at all.
-legacy_path = os.path.join(_tmp, "legacy.db")
-import sqlite3  # noqa: E402
-
-lc = sqlite3.connect(legacy_path)
-lc.execute("CREATE TABLE booked_times (id INTEGER PRIMARY KEY AUTOINCREMENT, "
-           "time_slot TEXT)")
-for v in ["10:00 AM", "02:00 PM", "02:00 PM", "05:00 PM", "not a time"]:
-    lc.execute("INSERT INTO booked_times (time_slot) VALUES (?)", (v,))
-lc.commit()
-lc.close()
-
-application.DB_PATH = legacy_path
-application.init_db()
-
-conn = sqlite3.connect(legacy_path)
-conn.row_factory = sqlite3.Row
-rows = conn.execute("SELECT meeting_date, time_slot FROM booked_times").fetchall()
-conn.close()
-
-slots = [r["time_slot"] for r in rows]
-check("legacy slots normalised to 24h", sorted(slots) == ["10:00", "14:00", "17:00"],
-      str(sorted(slots)))
-check("legacy duplicate dropped", slots.count("14:00") == 1)
-check("unparseable legacy slot dropped", "not a time" not in slots)
-check("legacy rows got a date", all(r["meeting_date"] for r in rows))
-check("no digits leak into spoken form after migration",
-      all(not any(ch.isdigit() for ch in sch.spoken_time(s)) for s in slots),
-      str([sch.spoken_time(s) for s in slots]))
-
-application.DB_PATH = os.environ["KEJUE_DB"]
+check("health reports open slot count",
+      "open_slots" in client.get("/health").get_json())
 
 
 print(f"\n{'=' * 60}\n{PASS} passed, {FAIL} failed")

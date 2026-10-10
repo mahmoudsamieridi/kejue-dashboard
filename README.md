@@ -54,17 +54,34 @@ This was a data-model problem, not a prompt problem. The old table was
 `booked_times(id, time_slot)` — **a time with no date**. There was nowhere to
 put a date, so "tomorrow" was the only thing the system could mean.
 
-Rebuilt around a real calendar:
+Rebuilt so that **availability is data, not code**. A slot exists because
+somebody opened it on the dashboard; the agents can only ever offer what is in
+the `slots` table. There is no hard-coded working day, no fixed hours and no
+weekend rule anywhere in the codebase.
 
-- `booked_times` gains `meeting_date`, `prospect_name`, `company_name`,
-  `created_at`, with a `UNIQUE(meeting_date, time_slot)` index as the real
-  double-booking guard.
-- Any date within a **60-day horizon** is bookable.
+- `slots(slot_date, slot_time, status, prospect_name, company_name, …)` with
+  `UNIQUE(slot_date, slot_time)`. `status` is `open` or `booked`.
+- Booking is a **conditional UPDATE** (`WHERE id = ? AND status = 'open'`), so
+  two agents racing for the last slot cannot both win.
+- Any date works — a slot ninety days out is as bookable as tomorrow.
 - **Asia/Amman** throughout, so "tomorrow" means tomorrow for the sales team.
-- Sunday–Thursday working week; Friday and Saturday are refused.
-- Slots on the hour, ten to five, with a one-hour minimum lead time.
-- Migration normalises legacy `"02:00 PM"` rows to `"14:00"`, drops
-  unparseable and colliding ones, and backfills a date.
+- One-hour minimum lead time; slots inside it are hidden and unbookable.
+- Arbitrary times, not a grid — `09:30` or `16:45` read correctly as
+  "half past nine in the morning" / "quarter to five in the afternoon".
+- The old `booked_times` table is dropped rather than migrated. It encoded a
+  fixed grid of hours with no date, so there is no sensible date to migrate
+  its rows onto.
+
+The dashboard grew an availability panel: add slots for a date (typed, or via
+Full day / Morning / Afternoon presets), see them grouped by day with open and
+booked states, and remove any of them — including a booked one, which is how a
+meeting gets cancelled. Times are parsed leniently, so `2 pm`, `14:00` and
+`half past two` all land on the same slot.
+
+If the calendar is empty, `check_available_times` returns no days and tells the
+agent to offer a callback rather than invent a time. Both prompts now carry
+that rule explicitly, along with "only ever offer a time the tool just returned
+to you".
 
 **The design decision worth calling out:** the agent is told *not to compute
 dates*. It passes the prospect's phrasing through verbatim — `"next Tuesday"`,
@@ -133,12 +150,12 @@ dialect drift, and mid-call code-switching. Eleven checks are **blocking**.
 a twelve-call run sheet with exactly what to say, what to watch for, and a
 results table.
 
-**Backend** — `test_scheduling.py`, 68 assertions, all passing. This is the
+**Backend** — `test_scheduling.py`, 119 assertions, all passing. This is the
 layer that can be run here and now; the two above need a live Sonus workspace.
 
 ```
 $ python test_scheduling.py
-68 passed, 0 failed
+119 passed, 0 failed
 ```
 
 It found one real bug during development: legacy `"02:00 PM"` rows flowed
@@ -152,7 +169,7 @@ read out on a call. Fixed in the migration, with a regression test.
 ```bash
 pip install -r requirements.txt
 python app.py              # http://127.0.0.1:5001
-python test_scheduling.py  # 68 assertions
+python test_scheduling.py  # 119 assertions
 ```
 
 `KEJUE_DB` overrides the database path; the test suite uses it so it can never
@@ -170,7 +187,9 @@ images without it.
 | `/health` | GET | Uptime probe |
 | `/webhook` | POST | Sonus `call.completed` receiver |
 | `/get_all_calls` | GET | Dashboard backfill |
-| `/get_meetings` | GET | Upcoming meetings panel |
+| `/api/slots` | GET | List slots |
+| `/api/slots` | POST | Open one or more slots |
+| `/api/slots/<id>` | DELETE | Remove a slot (open or booked) |
 | `/check_availability` | GET/POST | **Tool** `check_available_times` |
 | `/book_time` | GET/POST | **Tool** `book_meeting_time` |
 
@@ -179,16 +198,17 @@ images without it.
 Optional `date` (the prospect's own phrasing), optional `language` (`en`/`ar`).
 Omit `date` for the soonest open days.
 
-Returns `status` ∈ `ok` · `available` · `unavailable` · `day_full` ·
-`unclear_date`, always with `days[]` and an `instruction` string.
+Returns `status` ∈ `ok` · `available` · `no_slots_on_date` · `unavailable`
+(past) · `unclear_date`, always with `days[]` and an `instruction` string.
 
 ### `book_meeting_time`
 
 `date` and `time_slot` required; `prospect_name`, `company_name`, `language`
 optional.
 
-Returns `status` ∈ `booked` · `slot_taken` · `unavailable` · `too_soon` ·
-`unclear_date` · `unclear_time` · `missing_date` · `missing_time`. On success,
+Returns `status` ∈ `booked` · `slot_not_offered` · `slot_taken` ·
+`unavailable` · `too_soon` · `unclear_date` · `unclear_time` · `missing_date` ·
+`missing_time`. On success,
 `confirmation_spoken` is the digit-free line for the agent to read back.
 
 ---
@@ -210,9 +230,11 @@ Returns `status` ∈ `booked` · `slot_taken` · `unavailable` · `too_soon` ·
 - SQLite on Render's free tier has an ephemeral disk; bookings do not survive a
   redeploy. Fine for a demo, needs Postgres or a real calendar API for
   production.
-- The calendar is a fixed slot grid, not a Google/Outlook integration. The tool
-  contract is deliberately shaped so swapping the backing store does not touch
-  the prompts.
+- The calendar is dashboard-managed, not a Google/Outlook integration. The
+  tool contract is deliberately shaped so swapping the backing store does not
+  touch the prompts.
+- Anyone who can reach the dashboard can change availability or cancel a
+  meeting. It needs auth before it is more than a demo.
 - No authentication on the tool endpoints. Sonus supports secret-injected
   Bearer headers; production should use one.
 - Timezone is the sales team's, not the prospect's. A prospect abroad would be

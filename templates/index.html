@@ -26,13 +26,13 @@
 <body class="bg-sonusBg text-sonusText font-sans min-h-screen selection:bg-sonusAccent selection:text-white">
 
     <div class="max-w-4xl mx-auto p-6">
-        
+
         <header class="flex justify-between items-center mb-10 pb-6 border-b border-sonusBorder">
             <div>
                 <h1 class="text-3xl font-bold flex items-center gap-3 text-white">
                     🎙️ Kejue Outbound Sales
                 </h1>
-                <p class="text-sonusMuted mt-2 text-sm">Live AI Call Extraction & Database Dashboard</p>
+                <p class="text-sonusMuted mt-2 text-sm">Availability &amp; live call extraction</p>
             </div>
             <div class="flex items-center gap-2 border border-sonusBorder px-4 py-2 rounded-lg bg-sonusCard shadow-sm">
                 <span class="w-2.5 h-2.5 rounded-full bg-sonusSuccess animate-pulse"></span>
@@ -40,54 +40,226 @@
             </div>
         </header>
 
-        <!-- Upcoming meetings: proves the agents book real future dates, not just "tomorrow" -->
-        <section class="mb-10">
-            <div class="flex items-baseline justify-between mb-4">
-                <h2 class="text-sm font-semibold uppercase tracking-wider text-sonusMuted">Upcoming Meetings</h2>
-                <span class="text-xs text-sonusMuted">Asia/Amman &middot; Sun&ndash;Thu &middot; horizon 60 days</span>
+        <!-- ============ availability management ============ -->
+        <section class="mb-12">
+            <div class="flex items-baseline justify-between mb-1">
+                <h2 class="text-sm font-semibold uppercase tracking-wider text-sonusMuted">Availability</h2>
+                <span id="tz-label" class="text-xs text-sonusMuted"></span>
             </div>
-            <div id="meetings-container" class="grid gap-3 sm:grid-cols-2">
-                <div id="meetings-empty" class="text-sonusMuted text-sm border border-sonusBorder rounded-xl bg-sonusCard/30 p-5 sm:col-span-2">
-                    No meetings booked yet.
+            <p class="text-sonusMuted text-xs mb-4">
+                The agents can only offer what is open here. Nothing is hard-coded &mdash; if you
+                do not add a slot, it cannot be booked.
+            </p>
+
+            <form id="add-form" class="border border-sonusBorder rounded-xl bg-sonusCard p-5 mb-6">
+                <div class="grid gap-4 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+                    <div>
+                        <label for="slot-date" class="block text-xs text-sonusMuted uppercase tracking-wider font-semibold mb-2">Date</label>
+                        <input id="slot-date" type="date" required
+                               class="w-full bg-[#13110F] border border-sonusBorder rounded-lg px-3 py-2 text-sonusText
+                                      focus:outline-none focus:border-sonusAccent [color-scheme:dark]">
+                    </div>
+                    <div>
+                        <label for="slot-times" class="block text-xs text-sonusMuted uppercase tracking-wider font-semibold mb-2">
+                            Times <span class="normal-case font-normal text-sonusMuted/70">(comma separated)</span>
+                        </label>
+                        <input id="slot-times" type="text" placeholder="10:00, 11:30, 2 pm" required
+                               class="w-full bg-[#13110F] border border-sonusBorder rounded-lg px-3 py-2 text-sonusText
+                                      placeholder:text-sonusMuted/50 focus:outline-none focus:border-sonusAccent">
+                    </div>
+                    <button type="submit"
+                            class="bg-sonusAccent text-white font-semibold rounded-lg px-5 py-2 hover:opacity-90 transition-opacity whitespace-nowrap">
+                        Add slots
+                    </button>
+                </div>
+
+                <div class="flex flex-wrap items-center gap-2 mt-4 pt-4 border-t border-sonusBorder">
+                    <span class="text-xs text-sonusMuted mr-1">Quick fill:</span>
+                    <button type="button" data-preset="10:00,11:00,12:00,13:00,14:00,15:00,16:00,17:00"
+                            class="preset text-xs border border-sonusBorder rounded px-3 py-1.5 text-sonusText hover:border-sonusAccent transition-colors">
+                        Full day
+                    </button>
+                    <button type="button" data-preset="10:00,11:00,12:00"
+                            class="preset text-xs border border-sonusBorder rounded px-3 py-1.5 text-sonusText hover:border-sonusAccent transition-colors">
+                        Morning
+                    </button>
+                    <button type="button" data-preset="14:00,15:00,16:00,17:00"
+                            class="preset text-xs border border-sonusBorder rounded px-3 py-1.5 text-sonusText hover:border-sonusAccent transition-colors">
+                        Afternoon
+                    </button>
+                </div>
+
+                <p id="add-msg" class="text-xs mt-3 hidden"></p>
+            </form>
+
+            <div id="slots-container" class="space-y-5">
+                <div id="slots-empty" class="text-sonusMuted text-sm border border-sonusBorder rounded-xl bg-sonusCard/30 p-6 text-center">
+                    No availability yet. Add some above, or the agents will have nothing to offer.
                 </div>
             </div>
         </section>
 
+        <!-- ============ extracted calls ============ -->
         <h2 class="text-sm font-semibold uppercase tracking-wider text-sonusMuted mb-4">Extracted Calls</h2>
         <div id="calls-container" class="space-y-6">
-            <!-- Static Empty State -->
             <div id="empty-state" class="text-center py-16 border border-sonusBorder rounded-xl bg-sonusCard/30">
-                <p class="text-sonusText font-medium text-lg">Dashboard is Ready & Listening 🚀</p>
+                <p class="text-sonusText font-medium text-lg">Dashboard is Ready &amp; Listening 🚀</p>
                 <p class="text-sonusMuted text-sm mt-2">No calls extracted yet. Completed calls will appear here.</p>
             </div>
         </div>
 
     </div>
 
-    <!-- كود التحديث الذكي -->
     <script>
+        function escapeHtml(s) {
+            return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+            }[c]));
+        }
+
+        // ---------------------------------------------------- availability
+
+        const addForm  = document.getElementById('add-form');
+        const dateIn   = document.getElementById('slot-date');
+        const timesIn  = document.getElementById('slot-times');
+        const addMsg   = document.getElementById('add-msg');
+
+        function flash(text, ok) {
+            addMsg.textContent = text;
+            addMsg.className = 'text-xs mt-3 ' + (ok ? 'text-sonusSuccess' : 'text-sonusAccent');
+            addMsg.classList.remove('hidden');
+            setTimeout(() => addMsg.classList.add('hidden'), 5000);
+        }
+
+        document.querySelectorAll('.preset').forEach(btn => {
+            btn.addEventListener('click', () => {
+                timesIn.value = btn.dataset.preset.split(',').join(', ');
+                timesIn.focus();
+            });
+        });
+
+        addForm.addEventListener('submit', async e => {
+            e.preventDefault();
+            const times = timesIn.value.split(',').map(t => t.trim()).filter(Boolean);
+            if (!dateIn.value || !times.length) return;
+
+            try {
+                const res = await fetch('/api/slots', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ date: dateIn.value, times })
+                });
+                const data = await res.json();
+                if (!res.ok) { flash(data.message || 'Could not add those slots.', false); return; }
+
+                const bits = [];
+                if (data.created.length)    bits.push(`added ${data.created.length}`);
+                if (data.duplicates.length) bits.push(`${data.duplicates.length} already existed`);
+                if (data.unclear.length)    bits.push(`could not read: ${data.unclear.join(', ')}`);
+                flash(bits.join(' · ') || 'Nothing to add.', data.created.length > 0);
+
+                timesIn.value = '';
+                loadSlots();
+            } catch { flash('Request failed.', false); }
+        });
+
+        async function deleteSlot(id, label, booked) {
+            const warn = booked
+                ? `Cancel the booked meeting on ${label}?\n\nThe prospect will not be told.`
+                : `Remove ${label} from availability?`;
+            if (!confirm(warn)) return;
+            try {
+                const res = await fetch('/api/slots/' + id, { method: 'DELETE' });
+                if (!res.ok) { flash('Could not remove that slot.', false); return; }
+                loadSlots();
+            } catch { flash('Request failed.', false); }
+        }
+
+        function slotPill(s) {
+            const booked = s.status === 'booked';
+            const stale  = !booked && !s.bookable;
+
+            let cls = 'border-sonusBorder bg-[#13110F] text-sonusText';
+            if (booked) cls = 'border-sonusSuccess/40 bg-sonusSuccess/10 text-sonusSuccess';
+            else if (stale) cls = 'border-sonusBorder bg-[#13110F] text-sonusMuted/50';
+
+            const who = booked && (s.prospect_name || s.company_name)
+                ? `<span class="block text-[10px] opacity-80 mt-0.5">${escapeHtml(
+                      [s.prospect_name, s.company_name].filter(Boolean).join(' · '))}</span>`
+                : (stale ? '<span class="block text-[10px] mt-0.5">too soon</span>' : '');
+
+            const label = `${s.date_spoken} at ${s.time_spoken}`;
+            return `
+                <span class="inline-flex items-start gap-2 border rounded-lg pl-3 pr-2 py-1.5 text-sm ${cls}">
+                    <span>
+                        ${escapeHtml(s.time_spoken)}
+                        ${who}
+                    </span>
+                    <button onclick="deleteSlot(${s.id}, ${JSON.stringify(label).replace(/"/g, '&quot;')}, ${booked})"
+                            title="Remove"
+                            class="leading-none text-base opacity-50 hover:opacity-100 hover:text-sonusAccent transition-opacity">&times;</button>
+                </span>`;
+        }
+
+        async function loadSlots() {
+            let data;
+            try { data = await (await fetch('/api/slots')).json(); }
+            catch { return; }
+
+            document.getElementById('tz-label').textContent = data.timezone;
+
+            const container = document.getElementById('slots-container');
+            if (!data.slots.length) {
+                container.innerHTML = `
+                    <div class="text-sonusMuted text-sm border border-sonusBorder rounded-xl bg-sonusCard/30 p-6 text-center">
+                        No availability yet. Add some above, or the agents will have nothing to offer.
+                    </div>`;
+                return;
+            }
+
+            const byDate = {};
+            data.slots.forEach(s => (byDate[s.date] ||= []).push(s));
+
+            container.innerHTML = Object.keys(byDate).sort().map(date => {
+                const slots = byDate[date];
+                const open  = slots.filter(s => s.status === 'open' && s.bookable).length;
+                return `
+                    <div class="border border-sonusBorder rounded-xl bg-sonusCard p-5">
+                        <div class="flex items-baseline justify-between mb-3">
+                            <h3 class="text-sonusAccent font-semibold text-sm">${escapeHtml(slots[0].date_spoken)}</h3>
+                            <span class="text-xs text-sonusMuted">${open} open · ${slots.length} total</span>
+                        </div>
+                        <div class="flex flex-wrap gap-2">${slots.map(slotPill).join('')}</div>
+                    </div>`;
+            }).join('');
+        }
+
+        // ---------------------------------------------------- calls feed
+
         let callCount = 0;
 
         function renderCard(payload, isNew = false) {
             document.getElementById('empty-state').style.display = 'none';
 
             // Escaped: these values originate from caller speech via extraction.
-            const pName = escapeHtml(payload.prospect_name || 'Unknown Prospect');
-            const cName = escapeHtml(payload.company_name || 'Unknown Company');
-            const uCase = escapeHtml(payload.use_case || 'N/A');
+            const pName   = escapeHtml(payload.prospect_name || 'Unknown Prospect');
+            const cName   = escapeHtml(payload.company_name || 'Unknown Company');
+            const uCase   = escapeHtml(payload.use_case || 'N/A');
             const summary = escapeHtml(payload.call_summary || 'No summary available for this call.');
-            
+
             let statusTag = 'Call Completed';
             let statusColor = 'text-sonusText bg-[#211E1C] border-sonusBorder';
-            
+
             if (payload.is_meeting_booked === true || String(payload.is_meeting_booked).toLowerCase() === 'true') {
                 statusTag = 'Meeting Booked';
                 statusColor = 'text-sonusSuccess bg-sonusSuccess/10 border-sonusSuccess/30';
             }
 
-            const timeLabel = isNew ? `<span class="w-2 h-2 rounded-full bg-sonusAccent shadow-[0_0_8px_rgba(227,116,82,0.6)] animate-pulse"></span> Just Extracted` : 'From Database';
+            const timeLabel = isNew
+                ? `<span class="w-2 h-2 rounded-full bg-sonusAccent shadow-[0_0_8px_rgba(227,116,82,0.6)] animate-pulse"></span> Just Extracted`
+                : 'From Database';
 
-            const callCard = `
+            document.getElementById('calls-container').insertAdjacentHTML('afterbegin', `
                 <div class="rounded-xl p-6 shadow-lg border border-sonusBorder hover:border-sonusAccent/60 transition-all duration-300 bg-sonusCard mb-4 relative group text-left">
                     <div class="flex justify-between items-start mb-5">
                         <div class="w-full">
@@ -101,66 +273,38 @@
                         <p class="text-sonusText text-sm font-medium bg-[#13110F] inline-block px-3 py-1.5 rounded border border-sonusBorder">${uCase}</p>
                     </div>
                     <div class="mb-4">
-                        <p class="text-[11px] text-sonusMuted uppercase tracking-wider font-semibold mb-2 flex items-center justify-start gap-2">
-                            Call Summary <span class="text-sonusAccent opacity-0 group-hover:opacity-100 transition-opacity text-[10px] bg-sonusAccent/10 px-2 py-0.5 rounded">(Click to expand)</span>
-                        </p>
-                        <div class="bg-[#13110F] p-4 rounded-lg border border-sonusBorder cursor-pointer hover:border-sonusAccent/40 transition-colors" onclick="const p = this.querySelector('p'); p.classList.toggle('line-clamp-2'); p.classList.toggle('line-clamp-none');">
+                        <p class="text-[11px] text-sonusMuted uppercase tracking-wider font-semibold mb-2">Call Summary</p>
+                        <div class="bg-[#13110F] p-4 rounded-lg border border-sonusBorder cursor-pointer hover:border-sonusAccent/40 transition-colors"
+                             onclick="const p = this.querySelector('p'); p.classList.toggle('line-clamp-2'); p.classList.toggle('line-clamp-none');">
                             <p class="text-sonusText/90 text-sm leading-relaxed line-clamp-2 transition-all duration-300">${summary}</p>
                         </div>
                     </div>
                     <div class="mt-5 pt-4 border-t border-sonusBorder flex justify-between items-center">
-                        <span class="text-xs text-sonusMuted font-mono bg-[#13110F] px-2 py-1 rounded border border-sonusBorder">Agent: Kejue </span>
+                        <span class="text-xs text-sonusMuted font-mono bg-[#13110F] px-2 py-1 rounded border border-sonusBorder">Agent: Kejue</span>
                         <span class="text-xs text-sonusMuted flex items-center gap-2">${timeLabel}</span>
                     </div>
-                </div>
-            `;
-            document.getElementById('calls-container').insertAdjacentHTML('afterbegin', callCard);
+                </div>`);
         }
 
         function fetchCalls() {
             fetch('/get_all_calls')
-                .then(response => response.json())
+                .then(r => r.json())
                 .then(calls => {
                     if (calls.length > callCount) {
-                        const newCalls = calls.slice(callCount);
-                        newCalls.forEach(call => {
-                            let isLive = (callCount > 0);
-                            renderCard(call, isLive);
-                        });
+                        calls.slice(callCount).forEach(c => renderCard(c, callCount > 0));
                         callCount = calls.length;
                     }
-                })
-                .catch(error => console.log("Waiting for data..."));
-        }
-
-        function escapeHtml(s) {
-            return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
-                '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
-            }[c]));
-        }
-
-        function fetchMeetings() {
-            fetch('/get_meetings')
-                .then(r => r.json())
-                .then(meetings => {
-                    const container = document.getElementById('meetings-container');
-                    if (!meetings.length) return;
-                    container.innerHTML = meetings.map(m => `
-                        <div class="border border-sonusBorder rounded-xl bg-sonusCard p-4 flex flex-col gap-1">
-                            <p class="text-sonusAccent text-sm font-semibold">${escapeHtml(m.date_spoken)}</p>
-                            <p class="text-white font-medium">${escapeHtml(m.time_spoken)}</p>
-                            <p class="text-sonusMuted text-xs mt-1">
-                                ${escapeHtml(m.prospect_name)} &middot; ${escapeHtml(m.company_name)}
-                            </p>
-                        </div>`).join('');
                 })
                 .catch(() => {});
         }
 
+        // Default the date picker to today, in the browser's own calendar.
+        dateIn.value = new Date().toLocaleDateString('en-CA');
+
+        loadSlots();
         fetchCalls();
-        fetchMeetings();
+        setInterval(loadSlots, 5000);
         setInterval(fetchCalls, 3000);
-        setInterval(fetchMeetings, 5000);
     </script>
 </body>
 </html>
