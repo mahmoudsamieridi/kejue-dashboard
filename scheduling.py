@@ -119,6 +119,11 @@ _RELATIVE_WORDS = {
     "today": 0, "اليوم": 0, "النهاردة": 0,
     "tomorrow": 1, "tmrw": 1, "بكرا": 1, "بكره": 1, "غدا": 1, "غدًا": 1,
     "day after tomorrow": 2, "overmorrow": 2, "بعد بكرا": 2, "بعد بكره": 2,
+    # Past references resolve to real past dates rather than failing to parse,
+    # so classify_date() can return "in_the_past" and the agent apologises and
+    # moves on instead of asking the prospect to repeat themselves.
+    "yesterday": -1, "امبارح": -1, "مبارح": -1, "البارحة": -1, "مبارحة": -1,
+    "day before yesterday": -2, "أول امبارح": -2, "اول امبارح": -2,
 }
 
 _MONTH_WORDS = {}
@@ -206,11 +211,20 @@ def parse_date(raw, reference: date = None) -> date:
                 mult = 7 if any(w in s for w in ("week", "اسبوع", "أسبوع")) else 1
                 return ref + timedelta(days=n * mult)
 
-    # Weekday names. "next X" always means the X in the following week.
-    is_next = tokens and tokens[0] in ("next", "الجاي", "القادم", "الجايه")
+    # Weekday names. "next X" means the X in the following week; "last X" looks
+    # backwards, which classify_date() then rejects as a past date.
+    is_next = any(t in ("next", "الجاي", "القادم", "الجايه") for t in tokens)
+    is_last = any(t in ("last", "الماضي", "الماضية", "السابق", "فات") for t in tokens)
+    if is_last and any(w in s for w in ("week", "اسبوع", "أسبوع")):
+        return ref - timedelta(days=7)
     for t in tokens:
         if t in _WEEKDAY_WORDS:
             target = _WEEKDAY_WORDS[t]
+            if is_last:
+                delta = -((ref.weekday() - target) % 7)
+                if delta == 0:
+                    delta = -7       # "last Tuesday" on a Tuesday = a week ago
+                return ref + timedelta(days=delta)
             delta = (target - ref.weekday()) % 7
             if delta == 0:
                 delta = 7            # "tuesday" on a Tuesday = next Tuesday

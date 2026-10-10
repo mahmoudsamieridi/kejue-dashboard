@@ -75,6 +75,18 @@ check("month name + day",
 check("bare month/day rolls to next year when past",
       sch.parse_date("january 5") > today)
 
+check("yesterday", sch.parse_date("yesterday") == today - timedelta(days=1))
+check("arabic yesterday", sch.parse_date("امبارح") == today - timedelta(days=1))
+check("day before yesterday",
+      sch.parse_date("day before yesterday") == today - timedelta(days=2))
+check("last week", sch.parse_date("last week") == today - timedelta(days=7))
+check("last tuesday is in the past",
+      sch.parse_date("last tuesday") < today
+      and sch.parse_date("last tuesday").weekday() == 1,
+      str(sch.parse_date("last tuesday")))
+check("next vs last tuesday differ",
+      sch.parse_date("next tuesday") != sch.parse_date("last tuesday"))
+
 for junk in ("whenever you like", "", "asap", "the usual time"):
     try:
         sch.parse_date(junk)
@@ -146,6 +158,12 @@ r = post("/check_availability", date=(today + timedelta(days=400)).isoformat())
 check("beyond horizon refused",
       r["status"] == "unavailable" and r["reason"] == "beyond_horizon",
       r.get("reason"))
+
+for phrase in ("yesterday", "last tuesday", "last week", "امبارح"):
+    r = post("/check_availability", date=phrase)
+    check(f"past phrase {phrase!r} -> in_the_past, not unclear_date",
+          r["status"] == "unavailable" and r["reason"] == "in_the_past",
+          f"{r.get('status')}/{r.get('reason')}")
 
 r = post("/check_availability", date="whenever suits you")
 check("unparseable date handled gracefully",
